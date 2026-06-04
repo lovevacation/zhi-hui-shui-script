@@ -558,7 +558,12 @@
     async function getAnswer(question, options, type, blankCount) {
         // 错题本始终优先查询
         const bankAnswer = findInQuizBank(question, options);
-        if (bankAnswer) { log(`答案来自错题本: ${bankAnswer}`); return bankAnswer; }
+        if (bankAnswer) {
+            log(`答案来自错题本: ${bankAnswer}`);
+            // 错题本瞬间返回，页面可能还没渲染完，等待一下
+            await new Promise(r => setTimeout(r, 600));
+            return bankAnswer;
+        }
 
         // 题库模式下未开启AI回退 → 不调AI
         if (quizbankToggle.checked && !fallbackAiCheckbox.checked) {
