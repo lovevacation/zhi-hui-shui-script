@@ -158,6 +158,10 @@
             border: none; border-top: 1px solid #e2e8f0;
             margin: 2px 0;
         }
+        @keyframes pulse-alert {
+            0%, 100% { transform: scale(1); box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35); }
+            50% { transform: scale(1.15); box-shadow: 0 6px 24px rgba(239, 68, 68, 0.7); }
+        }
     `);
 
     const panelHTML = `
@@ -212,6 +216,7 @@
 
                 <button id="start-button">▶ 开始自动答题</button>
                 <div id="status-log"><div>📋 状态日志...</div></div>
+                <button id="clear-bank-btn" class="btn-secondary" style="width: 100%; margin-top: 4px; color: #ef4444;">🗑 清除错题本</button>
             </div>
         </div>
     `;
@@ -231,6 +236,7 @@
     const localQuizbankInput = document.getElementById('local-quizbank-input');
     const loadLocalQuizbankButton = document.getElementById('load-local-quizbank');
     const stopConditionSelect = document.getElementById('stop-condition');
+    const clearBankBtn = document.getElementById('clear-bank-btn');
 
     let isPanelVisible = false;
     let autoMode = false;
@@ -270,9 +276,23 @@
     loadLocalQuizbankButton.addEventListener('click', () => localQuizbankInput.click());
     localQuizbankInput.addEventListener('change', loadQuizBankFromFile);
     startButton.addEventListener('click', () => {
-        if (autoMode) toggleAutoMode(false, true);
+        if (autoMode) toggleAutoMode(false);  // 不再自动清除错题本
         else toggleAutoMode(true);
     });
+    // 手动清除错题本（需确认）
+    clearBankBtn.addEventListener('click', () => {
+        if (quizBank.length === 0) { log("错题本已为空。"); return; }
+        if (confirm(`确定要清除 ${quizBank.length} 条错题记录吗？此操作不可恢复。`)) {
+            quizBank = [];
+            (unsafeWindow || window).name = '';
+            saveQuizBank();
+            log("错题本已手动清除。");
+        }
+    });
+    function updateClearBankBtn() {
+        clearBankBtn.textContent = `🗑 清除错题本 (${quizBank.length}条)`;
+    }
+    updateClearBankBtn();
 
     // --- 4. 核心功能函数 ---
     function log(message) {
@@ -290,14 +310,32 @@
     }
 
     // 点击后验证跳转是否生效，未生效自动重试
+    let clickFailCount = 0;
+    const MAX_CLICK_FAILS = 6;
+
+    async function goBackToMain() {
+        log("🔙 连续失败过多，尝试返回主页面...");
+        const backBtn = document.querySelector('.left-back .back');
+        if (backBtn) {
+            reliableClick(backBtn);
+            await new Promise(r => setTimeout(r, 2000));
+            log("已点击返回。");
+        } else {
+            // 备用：直接跳转学习页
+            log("未找到返回按钮，跳转学习页...");
+            window.location.href = 'https://ai-smart-course-student-pro.zhihuishu.com/learnPage/';
+        }
+    }
+
     async function clickAndVerify(element, verifyFn, label, maxRetries, delayMs) {
         maxRetries = maxRetries || 3;
         delayMs = delayMs || 800;
-        if (!element) { log(`clickAndVerify: ${label} - 元素不存在`); return false; }
+        if (!element) { log(`clickAndVerify: ${label} - 元素不存在`); clickFailCount++; return false; }
         for (let i = 0; i < maxRetries; i++) {
             reliableClick(element);
             await new Promise(r => setTimeout(r, delayMs));
             if (verifyFn()) {
+                clickFailCount = 0; // 成功则重置
                 if (i > 0) log(`${label} - 第${i + 1}次点击生效`);
                 return true;
             }
@@ -307,6 +345,12 @@
             }
         }
         log(`${label} - 重试${maxRetries}次仍未生效`);
+        clickFailCount++;
+        if (clickFailCount >= MAX_CLICK_FAILS) {
+            log(`❌ 累计${clickFailCount}次点击失败，触发紧急返回...`);
+            await goBackToMain();
+            toggleAutoMode(false);
+        }
         return false;
     }
 
@@ -385,6 +429,7 @@
             });
         }
         log(`已保存 ${quizBank.length} 条到${skipDownload ? '存储' : '磁盘 + 存储'}`);
+        updateClearBankBtn();
     }
 
     async function fetchQuizBank() {
@@ -528,6 +573,19 @@
     }
 
     // --- 6. 考试答题页面 (studentexamcomh5) — 核心答题逻辑 ---
+
+    // 检测当前题目是否已有作答（覆盖所有题型）
+    function questionHasAnswer() {
+        // el-radio / el-checkbox 原生组件
+        if (document.querySelectorAll('.questionContent .el-radio__original:checked, .questionContent .el-checkbox__original:checked').length > 0) return true;
+        // custom-radio (radio-view li) 选中态 — 检查 .checkIcon 的 active 类或 li 的选中类
+        if (document.querySelectorAll('.questionContent .radio-view li.clearfix .checkIcon.active, .questionContent .radio-view li.clearfix .checkIcon[class*="active"], .questionContent .radio-view li.clearfix.active, .questionContent .radio-view li.clearfix[class*="active"]').length > 0) return true;
+        // 填空输入框
+        const inputs = document.querySelectorAll('.questionContent .el-input__inner');
+        if (Array.from(inputs).some(inp => inp.value && inp.value.trim() !== '')) return true;
+        return false;
+    }
+
     async function processNewExamPage() {
         log("进入答题页面，开始自动答题...");
         await new Promise(r => setTimeout(r, 800));
@@ -561,9 +619,8 @@
             const isLastQuestion = currentQNum >= totalQuestions;
             log(`当前题号: ${currentQNum}/${totalQuestions}${isLastQuestion ? ' (最后一题)' : ''}`);
 
-            // 跳过已作答的题
-            const checkedInputs = document.querySelectorAll('.questionContent .el-checkbox__original:checked');
-            if (checkedInputs.length > 0) {
+            // 跳过已作答的题（覆盖所有题型：单选/多选/判断/填空）
+            if (questionHasAnswer()) {
                 log(`第 ${currentQNum} 题已有作答记录，跳过。`);
                 if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
                 continue;
@@ -711,8 +768,40 @@
                     log("未找到答案，跳过。");
                 }
 
+                // 验证答案确实被选中（防点击无效）
+                if (answer) {
+                    let retries = 0;
+                    while (!questionHasAnswer() && retries < 3) {
+                        retries++;
+                        log(`答案未生效，重试点击(${retries}/3)...`);
+                        if (optionType === 'custom-radio') {
+                            for (let char of answer) {
+                                const idx = char.charCodeAt(0) - 65;
+                                if (idx >= 0 && idx < optionElements.length) {
+                                    reliableClick(optionElements[idx].querySelector('.checkIcon') || optionElements[idx]);
+                                    await new Promise(r => setTimeout(r, 300));
+                                }
+                            }
+                        } else if (optionType !== 'input') {
+                            for (let char of answer) {
+                                const idx = char.charCodeAt(0) - 65;
+                                if (idx >= 0 && idx < optionElements.length) {
+                                    reliableClick(optionElements[idx]);
+                                    await new Promise(r => setTimeout(r, 300));
+                                }
+                            }
+                        }
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                    if (questionHasAnswer()) {
+                        log("答案已确认生效。");
+                    } else {
+                        log("警告: 答案可能未生效，继续下一题。");
+                    }
+                }
+
                 if (!isLastQuestion) {
-                    await new Promise(r => setTimeout(r, 300));
+                    await new Promise(r => setTimeout(r, 800));
                     const nextBtn = document.querySelector('.next-topic');
                     if (nextBtn) {
                         const prevQNum = currentQNum;
@@ -723,7 +812,7 @@
                                 const m = el.innerText.match(/^(\d+)/);
                                 return m && parseInt(m[1]) !== prevQNum;
                             },
-                            '下一题', 3, 800);
+                            '下一题', 3, 1300);
                     }
                 } else {
                     log(">>>> 已到最后一题，开始提交前验证...");
@@ -761,14 +850,6 @@
             let pct = 0;
             if (progressEl) pct = parseFloat(progressEl.innerText) || 0;
             return { answered, unanswered, pct };
-        }
-
-        function questionHasAnswer() {
-            if (document.querySelectorAll('.questionContent .el-radio__original:checked, .questionContent .el-checkbox__original:checked').length > 0) return true;
-            if (document.querySelectorAll('.questionContent .radio-view li.clearfix .checkIcon.active, .questionContent .radio-view li.clearfix .checkIcon[class*="active"]').length > 0) return true;
-            const inputs = document.querySelectorAll('.questionContent .el-input__inner');
-            if (Array.from(inputs).some(inp => inp.value && inp.value.trim() !== '')) return true;
-            return false;
         }
 
         // 解析题型、选项等（复用逻辑）
@@ -930,18 +1011,18 @@
     }
 
     async function doSubmit() {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1000));
         const submitBtn = document.querySelector('.reviewDone');
         if (!submitBtn) { log("未找到提交按钮。"); return; }
 
         // 点击提交，验证确认弹窗出现
         const confirmed = await clickAndVerify(submitBtn,
             () => !!document.querySelector('.setting-defalut-tip-dialog .comfirm.button'),
-            '提交作业', 3, 1000);
+            '提交作业', 3, 1500);
         if (!confirmed) { log("提交按钮点击后未弹出确认框。"); return; }
 
         log("已点击提交作业。");
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1000));
         const confirmBtn = document.querySelector('.setting-defalut-tip-dialog .comfirm.button');
         if (confirmBtn) { reliableClick(confirmBtn); log("已确认提交。"); }
     }
@@ -1185,6 +1266,20 @@
         }
     }
 
+    function notifyUser(title, message) {
+        // 浏览器桌面通知
+        if (Notification && Notification.permission === 'granted') {
+            new Notification(title, { body: message, icon: 'https://image.zhihuishu.com/zhs/b2cm/base1/202304/a9b4329d78f142a8ac4d266e3c354187.png' });
+        } else if (Notification && Notification.permission !== 'denied') {
+            Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body: message }); });
+        }
+        // 闪烁面板按钮
+        toggleButton.style.animation = 'none';
+        toggleButton.offsetHeight; // reflow
+        toggleButton.style.animation = 'pulse-alert 0.5s ease 4';
+        setTimeout(() => { toggleButton.style.animation = ''; }, 2500);
+    }
+
     function toggleAutoMode(start, clearBank) {
         autoMode = start;
         GM_setValue('auto_mode_running', start);
@@ -1203,8 +1298,10 @@
                 (unsafeWindow || window).name = '';
                 saveQuizBank();
                 log('自动答题已停止，错题记录已清除。');
+                notifyUser('答题脚本已停止', '错题记录已清除');
             } else {
                 log('自动答题已停止。');
+                notifyUser('答题脚本已停止', '请检查页面状态');
             }
         }
     }
