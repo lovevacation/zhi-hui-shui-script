@@ -601,14 +601,14 @@
         log(`共检测到 ${totalQuestions} 道题。`);
 
         const examStartTime = Date.now();
-        const EXAM_TIMEOUT = 0.5 * 60 * 1000; // 1分钟超时
+        const EXAM_TIMEOUT = 3 * 60 * 1000; // 3分钟超时
 
         for (let i = 0; i < totalQuestions; i++) {
             if (!autoMode) { log("自动答题已停止。"); return; }
 
             // 超时保底：在答题界面停留过久，自动返回
             if (Date.now() - examStartTime > EXAM_TIMEOUT) {
-                log("⏰ 答题超时（半分钟），自动点击返回...");
+                log("⏰ 答题超时（3分钟），自动点击返回...");
                 const backBtn = document.querySelector('.left-back .back');
                 if (backBtn) { reliableClick(backBtn); log("已点击返回。"); }
                 else { log("未找到返回按钮。"); }
