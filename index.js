@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树AI智能课程 - 自动答题脚本
 // @namespace    https://github.com/lovevacation/zhi-hui-shui-script
-// @version      1.0.2
+// @version      1.0.4
 // @description  全自动完成智慧树AI智能课程掌握度练习。基于DeepSeek API自动答题，支持题库搜索与错题积累。
 // @author       Coren
 // @match        https://studentexamcomh5.zhihuishu.com/studentReviewTestOrExam*
@@ -768,36 +768,24 @@
                     log("未找到答案，跳过。");
                 }
 
-                // 验证答案确实被选中（防点击无效）
-                if (answer) {
+                // 验证答案确实被选中（custom-radio 须等导航后才生效，跳过即时检查）
+                if (answer && optionType !== 'custom-radio') {
                     let retries = 0;
                     while (!questionHasAnswer() && retries < 3) {
                         retries++;
                         log(`答案未生效，重试点击(${retries}/3)...`);
-                        if (optionType === 'custom-radio') {
-                            for (let char of answer) {
-                                const idx = char.charCodeAt(0) - 65;
-                                if (idx >= 0 && idx < optionElements.length) {
-                                    reliableClick(optionElements[idx].querySelector('.checkIcon') || optionElements[idx]);
-                                    await new Promise(r => setTimeout(r, 300));
-                                }
-                            }
-                        } else if (optionType !== 'input') {
-                            for (let char of answer) {
-                                const idx = char.charCodeAt(0) - 65;
-                                if (idx >= 0 && idx < optionElements.length) {
-                                    reliableClick(optionElements[idx]);
-                                    await new Promise(r => setTimeout(r, 300));
-                                }
+                        if (optionType === 'input') break; // 填空已在上面填入，无需重试
+                        for (let char of answer) {
+                            const idx = char.charCodeAt(0) - 65;
+                            if (idx >= 0 && idx < optionElements.length) {
+                                reliableClick(optionElements[idx]);
+                                await new Promise(r => setTimeout(r, 300));
                             }
                         }
                         await new Promise(r => setTimeout(r, 500));
                     }
-                    if (questionHasAnswer()) {
-                        log("答案已确认生效。");
-                    } else {
-                        log("警告: 答案可能未生效，继续下一题。");
-                    }
+                    if (questionHasAnswer()) log("答案已确认生效。");
+                    else log("警告: 答案可能未生效。");
                 }
 
                 if (!isLastQuestion) {
@@ -815,7 +803,43 @@
                             '下一题', 3, 1300);
                     }
                 } else {
-                    log(">>>> 已到最后一题，开始提交前验证...");
+                    // 最后一题：通过切到上一题再切回来触发答案提交，然后验证
+                    log(">>>> 最后一题，切题触发保存...");
+                    await new Promise(r => setTimeout(r, 800));
+                    const prevBtn = document.querySelector('.pre-topic');
+                    if (prevBtn) {
+                        // 切到上一题
+                        const prevOk = await clickAndVerify(prevBtn,
+                            () => {
+                                const el = document.querySelector('.questionContent .letterSortNum');
+                                if (!el) return false;
+                                const m = el.innerText.match(/^(\d+)/);
+                                return m && parseInt(m[1]) < currentQNum;
+                            },
+                            '上一题(切出)', 3, 1000);
+                        if (prevOk) {
+                            // 切回来
+                            await new Promise(r => setTimeout(r, 500));
+                            const nextBtn2 = document.querySelector('.next-topic');
+                            if (nextBtn2) {
+                                await clickAndVerify(nextBtn2,
+                                    () => {
+                                        const el = document.querySelector('.questionContent .letterSortNum');
+                                        if (!el) return false;
+                                        const m = el.innerText.match(/^(\d+)/);
+                                        return m && parseInt(m[1]) === currentQNum;
+                                    },
+                                    '下一题(切回)', 3, 1000);
+                                await new Promise(r => setTimeout(r, 500));
+                            }
+                        }
+                    }
+                    // 切回后检查答案是否已提交
+                    if (!questionHasAnswer()) {
+                        log("警告: 最后一题答案仍未检测到，但仍将提交。");
+                    } else {
+                        log("最后一题答案已确认。");
+                    }
                     await verifyAndSubmit(totalQuestions);
                     return;
                 }
