@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树AI智能课程 - 自动答题脚本
 // @namespace    https://github.com/lovevacation/zhi-hui-shui-script
-// @version      1.0.0
+// @version      1.0.1
 // @description  全自动完成智慧树AI智能课程掌握度练习。基于DeepSeek API自动答题，支持题库搜索与错题积累。
 // @author       Coren
 // @match        https://studentexamcomh5.zhihuishu.com/studentReviewTestOrExam*
@@ -289,6 +289,27 @@
         element.dispatchEvent(clickEvent);
     }
 
+    // 点击后验证跳转是否生效，未生效自动重试
+    async function clickAndVerify(element, verifyFn, label, maxRetries, delayMs) {
+        maxRetries = maxRetries || 3;
+        delayMs = delayMs || 800;
+        if (!element) { log(`clickAndVerify: ${label} - 元素不存在`); return false; }
+        for (let i = 0; i < maxRetries; i++) {
+            reliableClick(element);
+            await new Promise(r => setTimeout(r, delayMs));
+            if (verifyFn()) {
+                if (i > 0) log(`${label} - 第${i + 1}次点击生效`);
+                return true;
+            }
+            if (i < maxRetries - 1) {
+                log(`${label} - 点击未生效，重试(${i + 2}/${maxRetries})...`);
+                await new Promise(r => setTimeout(r, 400));
+            }
+        }
+        log(`${label} - 重试${maxRetries}次仍未生效`);
+        return false;
+    }
+
     function getLevenshteinDistance(a, b) {
         if (a.length === 0) return b.length;
         if (b.length === 0) return a.length;
@@ -495,7 +516,7 @@
             const checkedInputs = document.querySelectorAll('.questionContent .el-checkbox__original:checked');
             if (checkedInputs.length > 0) {
                 log(`第 ${currentQNum} 题已有作答记录，跳过。`);
-                if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { reliableClick(nb); await new Promise(r => setTimeout(r, 300)); } }
+                if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
                 continue;
             }
 
@@ -513,7 +534,7 @@
                 const questionTitle = titleEl ? titleEl.innerText.trim() : '';
                 if (!questionTitle) {
                     log("错误: 无法解析题干，跳过。");
-                    if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { reliableClick(nb); await new Promise(r => setTimeout(r, 300)); } }
+                    if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
                     continue;
                 }
                 log(`题目 (${questionType}): ${questionTitle}`);
@@ -527,7 +548,7 @@
                     textInputs = document.querySelectorAll('.questionContent .el-input__inner');
                     if (textInputs.length === 0) {
                         log("错误: 未找到填空输入框，跳过。");
-                        if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { reliableClick(nb); await new Promise(r => setTimeout(r, 300)); } }
+                        if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
                         continue;
                     }
                     optionType = 'input';
@@ -564,7 +585,7 @@
 
                 if (questionType !== '填空题' && optionsText.length === 0) {
                     log("错误: 无法解析选项，跳过。");
-                    if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { reliableClick(nb); await new Promise(r => setTimeout(r, 300)); } }
+                    if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
                     continue;
                 }
 
@@ -644,7 +665,17 @@
                 if (!isLastQuestion) {
                     await new Promise(r => setTimeout(r, 300));
                     const nextBtn = document.querySelector('.next-topic');
-                    if (nextBtn) { reliableClick(nextBtn); await new Promise(r => setTimeout(r, 300)); }
+                    if (nextBtn) {
+                        const prevQNum = currentQNum;
+                        await clickAndVerify(nextBtn,
+                            () => {
+                                const el = document.querySelector('.questionContent .letterSortNum');
+                                if (!el) return false;
+                                const m = el.innerText.match(/^(\d+)/);
+                                return m && parseInt(m[1]) !== prevQNum;
+                            },
+                            '下一题', 3, 800);
+                    }
                 } else {
                     log(">>>> 已到最后一题，开始提交前验证...");
                     await verifyAndSubmit(totalQuestions);
@@ -656,7 +687,7 @@
                 await new Promise(r => setTimeout(r, 500));
             } catch (err) {
                 log(`处理出错: ${err.message}, 跳过。`);
-                if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { reliableClick(nb); await new Promise(r => setTimeout(r, 300)); } }
+                if (!isLastQuestion) { const nb = document.querySelector('.next-topic'); if (nb) { const pq = currentQNum; clickAndVerify(nb, () => { const e = document.querySelector('.questionContent .letterSortNum'); if (!e) return false; const m = e.innerText.match(/^(\d+)/); return m && parseInt(m[1]) !== pq; }, '下一题(跳过)', 2, 600); } }
             }
         }
 
@@ -791,11 +822,19 @@
                 if (!numEl) continue;
                 const qNum = numEl.innerText.trim();
 
-                // 点击答题卡导航（先试 tree node，再试 tree content）
+                // 点击答题卡导航，验证题目内容区跳转成功
                 const treeNode = node.closest('.el-tree-node');
                 const treeContent = node.closest('.el-tree-node__content');
-                reliableClick(treeNode || treeContent || numEl);
-                await new Promise(r => setTimeout(r, 1000));
+                const navTarget = treeNode || treeContent || numEl;
+                const navOk = await clickAndVerify(navTarget,
+                    () => {
+                        const el = document.querySelector('.questionContent .letterSortNum');
+                        if (!el) return false;
+                        const m = el.innerText.match(/^(\d+)/);
+                        return m && m[1] === qNum;
+                    },
+                    `跳转第${qNum}题`, 3, 1000);
+                if (!navOk) { log(`跳转第${qNum}题失败，跳过。`); continue; }
 
                 // 已有作答 → 跳过AI
                 if (questionHasAnswer()) {
@@ -844,15 +883,18 @@
     async function doSubmit() {
         await new Promise(r => setTimeout(r, 500));
         const submitBtn = document.querySelector('.reviewDone');
-        if (submitBtn) {
-            reliableClick(submitBtn);
-            log("已点击提交作业。");
-            await new Promise(r => setTimeout(r, 600));
-            const confirmBtn = document.querySelector('.setting-defalut-tip-dialog .comfirm.button');
-            if (confirmBtn) { reliableClick(confirmBtn); log("已确认提交。"); }
-        } else {
-            log("未找到提交按钮。");
-        }
+        if (!submitBtn) { log("未找到提交按钮。"); return; }
+
+        // 点击提交，验证确认弹窗出现
+        const confirmed = await clickAndVerify(submitBtn,
+            () => !!document.querySelector('.setting-defalut-tip-dialog .comfirm.button'),
+            '提交作业', 3, 1000);
+        if (!confirmed) { log("提交按钮点击后未弹出确认框。"); return; }
+
+        log("已点击提交作业。");
+        await new Promise(r => setTimeout(r, 500));
+        const confirmBtn = document.querySelector('.setting-defalut-tip-dialog .comfirm.button');
+        if (confirmBtn) { reliableClick(confirmBtn); log("已确认提交。"); }
     }
 
     // --- 7. ai-smart-course 页面处理 ---
@@ -936,8 +978,8 @@
             await new Promise(r => setTimeout(r, 1000));
             const retryBtn = document.querySelector('.exam-preview .submit');
             if (retryBtn) {
-                reliableClick(retryBtn);
-                log("已点击重新答题，开始新一轮。");
+                const prevUrl = location.href;
+                await clickAndVerify(retryBtn, () => location.href !== prevUrl, '重新答题', 5, 1200);
             } else {
                 log("未找到重新答题按钮。");
                 toggleAutoMode(false);
@@ -946,7 +988,10 @@
             log("全部答对！点击关闭按钮返回...");
             await new Promise(r => setTimeout(r, 800));
             const closeBtn = document.querySelector('.exam-preview .close-btn');
-            if (closeBtn) { reliableClick(closeBtn); log("已关闭。"); }
+            if (closeBtn) {
+                const prevUrl = location.href;
+                await clickAndVerify(closeBtn, () => location.href !== prevUrl, '关闭', 4, 1000);
+            }
         }
     }
 
@@ -955,7 +1000,10 @@
         log("进入掌握度历史页，点击「去提升」...");
         await new Promise(r => setTimeout(r, 1000));
         const btn = document.querySelector('.improve-btn');
-        if (btn) { reliableClick(btn); log("已点击「去提升」，进入答题。"); }
+        if (btn) {
+            const prevUrl = location.href;
+            await clickAndVerify(btn, () => location.href !== prevUrl, '去提升', 5, 1200);
+        }
         else { log("未找到「去提升」按钮。"); }
     }
 
@@ -1033,7 +1081,12 @@
 
             log(`< 90%，点击「去提升」...`);
             const btn = document.querySelector('.simplified-mastery__action');
-            if (btn) { reliableClick(btn); log("已点击「去提升」。"); learnPageBusy = false; return; }
+            if (btn) {
+                const prevUrl = location.href;
+                learnPageBusy = false;
+                await clickAndVerify(btn, () => location.href !== prevUrl, '去提升', 5, 1200);
+                return;
+            }
             log("未找到「去提升」按钮。");
         }
 
