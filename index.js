@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树AI智能课程 - 自动答题脚本
 // @namespace    https://github.com/lovevacation/zhi-hui-shui-script
-// @version      1.0.1
+// @version      1.0.2
 // @description  全自动完成智慧树AI智能课程掌握度练习。基于DeepSeek API自动答题，支持题库搜索与错题积累。
 // @author       Coren
 // @match        https://studentexamcomh5.zhihuishu.com/studentReviewTestOrExam*
@@ -325,7 +325,7 @@
         return matrix[b.length][a.length];
     }
 
-    function findInQuizBank(question) {
+    function findInQuizBank(question, options) {
         if (quizBank.length === 0) { log("题库为空，跳过检索。"); return null; }
         log(`开始在 ${quizBank.length} 条题库中检索...`);
         let bestMatch = null, highestSimilarity = 0;
@@ -333,15 +333,40 @@
         for (const item of quizBank) {
             if (!item.q || !item.a) continue;
             const processedItemQ = item.q.replace(/^\d+[.、\s]*/, '').trim();
-            if (processedQuestion === processedItemQ) { log(`精确命中 → ${item.a}`); return item.a; }
+            if (processedQuestion === processedItemQ) { bestMatch = item; highestSimilarity = 1; break; }
             const distance = getLevenshteinDistance(processedQuestion, processedItemQ);
             const similarity = 1 - (distance / Math.max(processedQuestion.length, processedItemQ.length, 1));
             if (similarity > highestSimilarity) { highestSimilarity = similarity; bestMatch = item; }
         }
         const threshold = 0.8;
-        if (highestSimilarity >= threshold) {
-            log(`模糊命中(${(highestSimilarity * 100).toFixed(0)}%) → ${bestMatch.a}`);
-            return bestMatch.a;
+        if (highestSimilarity >= threshold && bestMatch) {
+            let answer = bestMatch.a;
+            // 如果有选项文本，基于文本重映射字母（防选项顺序变化）
+            if (options && options.length > 0 && /^[A-Z]+$/.test(answer) && bestMatch.t) {
+                const storedTexts = bestMatch.t.split('|');
+                let remapped = '';
+                for (let i = 0; i < answer.length; i++) {
+                    const storedIdx = answer.charCodeAt(i) - 65;
+                    const targetText = storedTexts[storedIdx] || '';
+                    // 在当前选项中找匹配文本的索引
+                    let bestIdx = -1, bestSim = 0;
+                    for (let j = 0; j < options.length; j++) {
+                        const sim = 1 - (getLevenshteinDistance(targetText, options[j].trim()) / Math.max(targetText.length, options[j].trim().length, 1));
+                        if (sim > bestSim) { bestSim = sim; bestIdx = j; }
+                    }
+                    if (bestIdx >= 0 && bestSim > 0.6) {
+                        remapped += String.fromCharCode(65 + bestIdx);
+                    } else {
+                        remapped += answer[i]; // 回退到原字母
+                    }
+                }
+                if (remapped !== answer) {
+                    log(`选项顺序变化: ${answer} → ${remapped} (基于文本匹配)`);
+                }
+                answer = remapped;
+            }
+            log(`${highestSimilarity === 1 ? '精确' : '模糊'}命中(${(highestSimilarity * 100).toFixed(0)}%) → ${answer}`);
+            return answer;
         }
         log(`未命中(最高${(highestSimilarity * 100).toFixed(0)}%)，交给AI`);
         return null;
@@ -407,20 +432,22 @@
     }
 
     // --- 5. DeepSeek API ---
-    function callDeepSeekApi(question, options, type, blankCount) {
+    function callDeepSeekApi(question, options, type, blankCount, hint) {
         return new Promise((resolve) => {
             const apiKey = apiKeyInput.value;
             if (!apiKey) { log('错误: 请先填入 DeepSeek API Key'); return resolve(null); }
 
             let prompt;
+            const hintText = hint ? `\n\n【重要参考】错题本中记录了该题的答案可能是「${hint}」，请优先参考此答案。如果该答案与当前选项明显不符（可能是选项顺序变化），请根据内容含义重新匹配。` : '';
+
             if (type === '填空题') {
                 const realBlankCount = blankCount || 1;
-                prompt = `你是一个专业的在线课程答题助手。请根据以下填空题的题干，直接给出空白处应填入的正确答案。规则：1. **这是一个填空题，有 ${realBlankCount} 个空需要填入。** 2. **直接返回答案文字，如果只有一个空，直接返回答案；如果有多个空，用斜杠"/"分隔。不要包含任何解释或额外文字。** 例如：单空填"大变局"，就返回 "大变局"；两空填"不稳定"和"不确定性"，就返回 "不稳定/不确定性"。---题目: ${question}---你的答案 (仅文字，多空用/分隔):`;
+                prompt = `你是一个专业的在线课程答题助手。请根据以下填空题的题干，直接给出空白处应填入的正确答案。规则：1. **这是一个填空题，有 ${realBlankCount} 个空需要填入。** 2. **直接返回答案文字，如果只有一个空，直接返回答案；如果有多个空，用斜杠"/"分隔。不要包含任何解释或额外文字。** 例如：单空填"大变局"，就返回 "大变局"；两空填"不稳定"和"不确定性"，就返回 "不稳定/不确定性"。${hintText}---题目: ${question}---你的答案 (仅文字，多空用/分隔):`;
             } else {
                 const optionsText = options.length > 0
                     ? options.map((opt, index) => `${String.fromCharCode(65 + index)}. ${opt}`).join('\n')
                     : '';
-                prompt = `你是一个专业的在线课程答题助手。请根据以下题目和选项，直接给出正确答案的字母。规则：1.  **${type === '多选题' ? '这是一个多选题，答案可能有多个。' : '这是一个' + type + '。'}** 2.  **直接返回代表正确选项的字母，不要包含任何其他解释、标点符号或文字。** -   例如：如果答案是A，就返回 "A"。-   如果是多选题，答案是A和B，就返回 "AB"。-   如果是判断题，对的返回 "A"，错的返回 "B"。---题目: ${question}---选项:${optionsText}---你的答案 (仅字母):`;
+                prompt = `你是一个专业的在线课程答题助手。请根据以下题目和选项，直接给出正确答案的字母。规则：1.  **${type === '多选题' ? '这是一个多选题，答案可能有多个。' : '这是一个' + type + '。'}** 2.  **直接返回代表正确选项的字母，不要包含任何其他解释、标点符号或文字。** -   例如：如果答案是A，就返回 "A"。-   如果是多选题，答案是A和B，就返回 "AB"。-   如果是判断题，对的返回 "A"，错的返回 "B"。${hintText}---题目: ${question}---选项:${optionsText}---你的答案 (仅字母):`;
             }
 
             log("正在请求 DeepSeek API...");
@@ -464,18 +491,40 @@
         });
     }
 
-    async function getAnswer(question, options, type, blankCount) {
-        // 题库优先
-        if (quizbankToggle.checked) {
-            const bankAnswer = findInQuizBank(question);
-            if (bankAnswer) { log(`答案来自记录: ${bankAnswer}`); return bankAnswer; }
-            if (!fallbackAiCheckbox.checked) {
-                log("题库未命中，且未开启 AI Fallback。");
-                return null;
-            }
-            log("题库未命中，交给 DeepSeek...");
+    function findBestBankHint(question) {
+        // 搜索错题本中与当前题目最相似的记录，作为AI提示
+        if (quizBank.length === 0) return null;
+        const processedQuestion = question.replace(/^\d+[.、\s]*/, '').trim();
+        let bestMatch = null, highestSim = 0;
+        for (const item of quizBank) {
+            if (!item.q || !item.a) continue;
+            const processedItemQ = item.q.replace(/^\d+[.、\s]*/, '').trim();
+            const distance = getLevenshteinDistance(processedQuestion, processedItemQ);
+            const sim = 1 - (distance / Math.max(processedQuestion.length, processedItemQ.length, 1));
+            if (sim > highestSim) { highestSim = sim; bestMatch = item; }
         }
-        return await callDeepSeekApi(question, options, type, blankCount);
+        // 相似度 > 60% 就作为参考提示
+        if (bestMatch && highestSim > 0.6) {
+            return bestMatch.t || bestMatch.a;
+        }
+        return null;
+    }
+
+    async function getAnswer(question, options, type, blankCount) {
+        // 错题本始终优先查询
+        const bankAnswer = findInQuizBank(question, options);
+        if (bankAnswer) { log(`答案来自错题本: ${bankAnswer}`); return bankAnswer; }
+
+        // 题库模式下未开启AI回退 → 不调AI
+        if (quizbankToggle.checked && !fallbackAiCheckbox.checked) {
+            log("错题本未命中，且未开启 AI Fallback。");
+            return null;
+        }
+
+        // 调用AI，传入错题本最佳匹配作为参考提示
+        const hint = findBestBankHint(question);
+        if (hint) log(`AI提示: 错题本记录 ≈「${hint}」`);
+        return await callDeepSeekApi(question, options, type, blankCount, hint);
     }
 
     // --- 6. 考试答题页面 (studentexamcomh5) — 核心答题逻辑 ---
@@ -489,7 +538,7 @@
         log(`共检测到 ${totalQuestions} 道题。`);
 
         const examStartTime = Date.now();
-        const EXAM_TIMEOUT = 5 * 60 * 1000; // 5分钟超时
+        const EXAM_TIMEOUT = 1 * 60 * 1000; // 1分钟超时
 
         for (let i = 0; i < totalQuestions; i++) {
             if (!autoMode) { log("自动答题已停止。"); return; }
@@ -957,12 +1006,34 @@
                 }
                 if (!correctAnswer) continue;
 
+                // 提取选项文本，存储后用于防选项顺序变化的匹配
+                let answerTexts = correctAnswer; // 默认用字母（向后兼容）
+                if (!isFill && /^[A-Z]+$/.test(correctAnswer)) {
+                    const texts = [];
+                    // 从 exam-item 中找选项字母→文本的映射
+                    const letterEls = item.querySelectorAll('.letterSort');
+                    const textEls = item.querySelectorAll('.option-name pre, .preStyle, .stem');
+                    for (let k = 0; k < Math.min(letterEls.length, textEls.length); k++) {
+                        const letter = letterEls[k].innerText.trim().charAt(0);
+                        const idx = letter.charCodeAt(0) - 65;
+                        if (idx >= 0 && idx < 26) texts[idx] = textEls[k].innerText.trim();
+                    }
+                    // 依照正确答案的字母顺序拼接对应文本
+                    const mapped = [];
+                    for (const ch of correctAnswer) {
+                        const idx = ch.charCodeAt(0) - 65;
+                        mapped.push(texts[idx] || ch);
+                    }
+                    answerTexts = mapped.join('|');
+                }
+
                 const exists = quizBank.find(entry => entry.q === qText);
                 if (!exists) {
-                    quizBank.push({ q: qText, a: correctAnswer });
+                    quizBank.push({ q: qText, a: correctAnswer, t: answerTexts });
                     newRecords++;
-                } else if (exists.a !== correctAnswer) {
+                } else if (exists.a !== correctAnswer || exists.t !== answerTexts) {
                     exists.a = correctAnswer;
+                    exists.t = answerTexts;
                     newRecords++;
                 }
             } catch (e) {
