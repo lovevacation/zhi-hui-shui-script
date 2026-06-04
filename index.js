@@ -596,14 +596,14 @@
         log(`共检测到 ${totalQuestions} 道题。`);
 
         const examStartTime = Date.now();
-        const EXAM_TIMEOUT = 1 * 60 * 1000; // 1分钟超时
+        const EXAM_TIMEOUT = 0.5 * 60 * 1000; // 1分钟超时
 
         for (let i = 0; i < totalQuestions; i++) {
             if (!autoMode) { log("自动答题已停止。"); return; }
 
             // 超时保底：在答题界面停留过久，自动返回
             if (Date.now() - examStartTime > EXAM_TIMEOUT) {
-                log("⏰ 答题超时（5分钟），自动点击返回...");
+                log("⏰ 答题超时（半分钟），自动点击返回...");
                 const backBtn = document.querySelector('.left-back .back');
                 if (backBtn) { reliableClick(backBtn); log("已点击返回。"); }
                 else { log("未找到返回按钮。"); }
@@ -952,7 +952,8 @@
         // 进度100%直接提交
         if (status.unanswered === 0 || status.pct >= 100) {
             log("✅ 全部已作答，提交...");
-            await doSubmit();
+            const ok = await doSubmit();
+            if (!ok) toggleAutoMode(false);
             return;
         }
 
@@ -1031,24 +1032,49 @@
         } else if (status.unanswered > 1) {
             log(`⚠️ 仍有 ${status.unanswered} 道未答，但已达最大重试次数，仍然提交。`);
         }
-        await doSubmit();
+        const ok = await doSubmit();
+        if (!ok) toggleAutoMode(false);
     }
 
     async function doSubmit() {
+        const submitUrl = location.href;
         await new Promise(r => setTimeout(r, 1000));
         const submitBtn = document.querySelector('.reviewDone');
-        if (!submitBtn) { log("未找到提交按钮。"); return; }
+        if (!submitBtn) { log("未找到提交按钮。"); return false; }
 
         // 点击提交，验证确认弹窗出现
         const confirmed = await clickAndVerify(submitBtn,
             () => !!document.querySelector('.setting-defalut-tip-dialog .comfirm.button'),
             '提交作业', 3, 1500);
-        if (!confirmed) { log("提交按钮点击后未弹出确认框。"); return; }
+        if (!confirmed) { log("提交按钮点击后未弹出确认框。"); return false; }
 
         log("已点击提交作业。");
         await new Promise(r => setTimeout(r, 1000));
         const confirmBtn = document.querySelector('.setting-defalut-tip-dialog .comfirm.button');
-        if (confirmBtn) { reliableClick(confirmBtn); log("已确认提交。"); }
+        if (!confirmBtn) { log("未找到确认按钮。"); return false; }
+
+        // 点击确认，然后验证页面跳转
+        reliableClick(confirmBtn);
+        log("已确认提交。");
+
+        // 等待并验证页面是否跳转
+        for (let i = 0; i < 8; i++) {
+            await new Promise(r => setTimeout(r, 1500));
+            if (location.href !== submitUrl) {
+                log("✅ 提交成功，页面已跳转。");
+                return true;
+            }
+            // 弹窗可能还在，再点一次确认
+            const retryConfirm = document.querySelector('.setting-defalut-tip-dialog .comfirm.button');
+            if (retryConfirm && i < 3) {
+                log(`页面未跳转，重试确认(${i + 1})...`);
+                reliableClick(retryConfirm);
+            }
+        }
+
+        log("❌ 提交后页面长时间未跳转，触发紧急返回...");
+        await goBackToMain();
+        return false;
     }
 
     // --- 7. ai-smart-course 页面处理 ---
