@@ -1237,13 +1237,16 @@
             // 点击资源卡片
             reliableClick(card);
             clicked++;
-            log(`  点击未完成资源(${clicked})...`);
-            // 等待加载 + 完成标识出现
-            for (let w = 0; w < 15; w++) {
+            log(`  点击未完成资源(${clicked})，等待4秒...`);
+            // 先等4秒确保平台计入完成
+            await new Promise(r => setTimeout(r, 4000));
+            // 再等完成标识出现
+            let done = !!card.querySelector('.finished-icon');
+            for (let w = 0; w < 10 && !done; w++) {
                 await new Promise(r => setTimeout(r, 1000));
-                if (card.querySelector('.finished-icon')) { log(`  资源已完成。`); break; }
+                if (card.querySelector('.finished-icon')) { done = true; break; }
             }
-            if (!card.querySelector('.finished-icon')) log(`  资源超时未完成，继续。`);
+            log(done ? `  资源已完成。` : `  资源超时未完成，继续。`);
             await new Promise(r => setTimeout(r, 500));
         }
         if (clicked > 0) log(`  共处理 ${clicked} 个资源。`);
@@ -1312,8 +1315,10 @@
 
             const percentEl = document.querySelector('.simplified-mastery__percent');
             if (!percentEl) { log(`"${name}" 无法读取掌握度。`); continue; }
-            const pct = parseInt(percentEl.innerText);
-            if (isNaN(pct)) { log(`"${name}" 掌握度解析失败。`); continue; }
+            const rawText = percentEl.innerText || percentEl.textContent || '';
+            const pctMatch = rawText.match(/(\d+)/);
+            const pct = pctMatch ? parseInt(pctMatch[1]) : NaN;
+            if (isNaN(pct)) { log(`"${name}" 掌握度解析失败 (raw: "${rawText}")。`); continue; }
             log(`"${name}" 掌握度: ${pct}%`);
 
             if (pct >= 90) {
