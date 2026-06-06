@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树AI智能课程 - 自动答题脚本
 // @namespace    https://github.com/lovevacation/zhi-hui-shui-script
-// @version      1.0.4
+// @version      1.0.5
 // @description  全自动完成智慧树AI智能课程掌握度练习。基于DeepSeek API自动答题，支持题库搜索与错题积累。
 // @author       Coren
 // @match        https://studentexamcomh5.zhihuishu.com/studentReviewTestOrExam*
@@ -1050,7 +1050,7 @@
         // 点击提交，验证确认弹窗出现
         const confirmed = await clickAndVerify(submitBtn,
             () => !!document.querySelector('.setting-defalut-tip-dialog .comfirm.button'),
-            '提交作业', 3, 1500);
+            '提交作业', 3, 4000);
         if (!confirmed) { log("提交按钮点击后未弹出确认框。"); return false; }
 
         log("已点击提交作业。");
@@ -1216,6 +1216,39 @@
 
     let learnPageBusy = false;
 
+    // 完成当前知识点的必学资源
+    async function completeCurrentResources(itemName) {
+        // 读取必学进度
+        const progressEls = document.querySelectorAll('.section-item-collapse-info.active .collapse-info-progress .progress-text');
+        if (progressEls.length === 0) { log("  未找到必学进度元素。"); return; }
+        const text = progressEls[0].innerText.trim(); // "必学 1/2"
+        const match = text.match(/(\d+)\s*\/\s*(\d+)/);
+        if (!match) { log("  无法解析必学进度。"); return; }
+        const done = parseInt(match[1]), total = parseInt(match[2]);
+        log(`  "${itemName}" 必学资源: ${done}/${total}`);
+        if (done >= total) { log("  必学资源已完成。"); return; }
+
+        // 找未完成的资源卡片
+        const cards = document.querySelectorAll('.basic-info-video-card-container');
+        let clicked = 0;
+        for (const card of cards) {
+            if (!autoMode) break;
+            if (card.querySelector('.finished-icon')) continue; // 已完成
+            // 点击资源卡片
+            reliableClick(card);
+            clicked++;
+            log(`  点击未完成资源(${clicked})...`);
+            // 等待加载 + 完成标识出现
+            for (let w = 0; w < 15; w++) {
+                await new Promise(r => setTimeout(r, 1000));
+                if (card.querySelector('.finished-icon')) { log(`  资源已完成。`); break; }
+            }
+            if (!card.querySelector('.finished-icon')) log(`  资源超时未完成，继续。`);
+            await new Promise(r => setTimeout(r, 500));
+        }
+        if (clicked > 0) log(`  共处理 ${clicked} 个资源。`);
+    }
+
     // 学习主页面
     async function processLearnPage() {
         if (learnPageBusy) return;
@@ -1272,8 +1305,10 @@
                     }
                 }
                 if (!found) { log(`未找到项目"${name}"，跳过。`); continue; }
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 1500));
             }
+            // 先完成必学资源（无论是否切换都要检查）
+            await completeCurrentResources(name);
 
             const percentEl = document.querySelector('.simplified-mastery__percent');
             if (!percentEl) { log(`"${name}" 无法读取掌握度。`); continue; }
