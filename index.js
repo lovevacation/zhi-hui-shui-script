@@ -1228,11 +1228,15 @@
         log(`  "${itemName}" 必学资源: ${done}/${total}`);
         if (done >= total) { log("  必学资源已完成。"); return; }
 
-        // 找未完成的资源卡片
-        const cards = document.querySelectorAll('.basic-info-video-card-container');
+        // 找未完成的资源卡片（循环中重新查询DOM，防Vue渲染导致引用失效）
         let clicked = 0;
-        for (const card of cards) {
+        let cards = document.querySelectorAll('.basic-info-video-card-container');
+        for (let idx = 0; idx < cards.length; idx++) {
             if (!autoMode) break;
+            // 每次循环重新获取最新DOM
+            cards = document.querySelectorAll('.basic-info-video-card-container');
+            if (idx >= cards.length) break;
+            const card = cards[idx];
             if (card.querySelector('.finished-icon')) continue; // 已完成
             // 点击资源卡片
             reliableClick(card);
@@ -1240,11 +1244,12 @@
             log(`  点击未完成资源(${clicked})，等待4秒...`);
             // 先等4秒确保平台计入完成
             await new Promise(r => setTimeout(r, 4000));
-            // 再等完成标识出现
-            let done = !!card.querySelector('.finished-icon');
+            // 重新查询DOM检查完成标识（防Vue重渲染后旧引用失效）
+            let done = false;
             for (let w = 0; w < 10 && !done; w++) {
                 await new Promise(r => setTimeout(r, 1000));
-                if (card.querySelector('.finished-icon')) { done = true; break; }
+                const freshCards = document.querySelectorAll('.basic-info-video-card-container');
+                if (freshCards[idx] && freshCards[idx].querySelector('.finished-icon')) { done = true; break; }
             }
             log(done ? `  资源已完成。` : `  资源超时未完成，继续。`);
             await new Promise(r => setTimeout(r, 500));
@@ -1312,17 +1317,31 @@
             }
             // 先完成必学资源（无论是否切换都要检查）
             await completeCurrentResources(name);
+            // 等DOM稳定后再检测掌握度
+            await new Promise(r => setTimeout(r, 800));
 
-            const percentEl = document.querySelector('.simplified-mastery__percent');
-            if (!percentEl) { log(`"${name}" 无法读取掌握度。`); continue; }
-            const rawText = percentEl.innerText || percentEl.textContent || '';
-            const pctMatch = rawText.match(/(\d+)/);
-            const pct = pctMatch ? parseInt(pctMatch[1]) : NaN;
-            if (isNaN(pct)) { log(`"${name}" 掌握度解析失败 (raw: "${rawText}")。`); continue; }
+            // 读取掌握度，并做双重验证
+            function readMasteryPct() {
+                const el = document.querySelector('.simplified-mastery__percent');
+                if (!el) return NaN;
+                const raw = el.innerText || el.textContent || '';
+                const m = raw.match(/(\d+)/);
+                return m ? parseInt(m[1]) : NaN;
+            }
+            let pct = readMasteryPct();
+            if (isNaN(pct)) { log(`"${name}" 无法读取掌握度。`); continue; }
             log(`"${name}" 掌握度: ${pct}%`);
 
             if (pct >= 90) {
                 log(`≥90%，跳过。`);
+                continue;
+            }
+
+            // 二次确认：重新读取防止瞬间数值变动
+            await new Promise(r => setTimeout(r, 500));
+            const pct2 = readMasteryPct();
+            if (!isNaN(pct2) && pct2 >= 90) {
+                log(`二次确认 ≥90% (${pct2}%)，跳过。`);
                 continue;
             }
 
