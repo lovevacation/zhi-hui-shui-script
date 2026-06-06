@@ -1221,35 +1221,38 @@
         // 读取必学进度
         const progressEls = document.querySelectorAll('.section-item-collapse-info.active .collapse-info-progress .progress-text');
         if (progressEls.length === 0) { log("  未找到必学进度元素。"); return; }
-        const text = progressEls[0].innerText.trim(); // "必学 1/2"
+        const text = progressEls[0].innerText.trim();
         const match = text.match(/(\d+)\s*\/\s*(\d+)/);
         if (!match) { log("  无法解析必学进度。"); return; }
         const done = parseInt(match[1]), total = parseInt(match[2]);
         log(`  "${itemName}" 必学资源: ${done}/${total}`);
         if (done >= total) { log("  必学资源已完成。"); return; }
 
-        // 找未完成的资源卡片（循环中重新查询DOM，防Vue渲染导致引用失效）
-        let clicked = 0;
+        // 等待资源卡片加载（Vue渲染可能延迟）
         let cards = document.querySelectorAll('.basic-info-video-card-container');
+        for (let w = 0; w < 8 && cards.length === 0; w++) {
+            await new Promise(r => setTimeout(r, 1000));
+            cards = document.querySelectorAll('.basic-info-video-card-container');
+        }
+        if (cards.length === 0) { log("  资源卡片未加载，跳过。"); return; }
+
+        // 找未完成的资源卡片
+        let clicked = 0;
         for (let idx = 0; idx < cards.length; idx++) {
             if (!autoMode) break;
-            // 每次循环重新获取最新DOM
             cards = document.querySelectorAll('.basic-info-video-card-container');
             if (idx >= cards.length) break;
             const card = cards[idx];
-            if (card.querySelector('.finished-icon')) continue; // 已完成
-            // 点击资源卡片
+            if (card.querySelector('.finished-icon')) continue;
             reliableClick(card);
             clicked++;
             log(`  点击未完成资源(${clicked})，等待4秒...`);
-            // 先等4秒确保平台计入完成
             await new Promise(r => setTimeout(r, 4000));
-            // 重新查询DOM检查完成标识（防Vue重渲染后旧引用失效）
             let done = false;
             for (let w = 0; w < 10 && !done; w++) {
                 await new Promise(r => setTimeout(r, 1000));
-                const freshCards = document.querySelectorAll('.basic-info-video-card-container');
-                if (freshCards[idx] && freshCards[idx].querySelector('.finished-icon')) { done = true; break; }
+                const fresh = document.querySelectorAll('.basic-info-video-card-container');
+                if (fresh[idx] && fresh[idx].querySelector('.finished-icon')) { done = true; break; }
             }
             log(done ? `  资源已完成。` : `  资源超时未完成，继续。`);
             await new Promise(r => setTimeout(r, 500));
