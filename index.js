@@ -415,7 +415,7 @@
             log(`${highestSimilarity === 1 ? '精确' : '模糊'}命中(${(highestSimilarity * 100).toFixed(0)}%) → ${answer}`);
             return answer;
         }
-        log(`未命中(最高${(highestSimilarity * 100).toFixed(0)}%)，交给AI`);
+        log(`未命中(最高${(highestSimilarity * 100).toFixed(0)}%，${bestMatch ? '最佳候选题：「' + bestMatch.q.substring(0, 40) + '」' : '无候选题'})，交给AI`);
         return null;
     }
 
