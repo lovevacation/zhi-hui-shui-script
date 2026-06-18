@@ -372,17 +372,21 @@
     function findInQuizBank(question, options) {
         if (quizBank.length === 0) { log("题库为空，跳过检索。"); return null; }
         log(`开始在 ${quizBank.length} 条题库中检索...`);
+        // 归一化：去序号、去所有空格和标点，用于更鲁棒的匹配
+        function norm(s) {
+            return s.replace(/^\d+[.、\s]*/, '').replace(/[\s　\r\n，。！？、；：""''（）\(\)\[\]【】\-—…·]/g, '').trim();
+        }
+        const procQ = norm(question);
         let bestMatch = null, highestSimilarity = 0;
-        const processedQuestion = question.replace(/^\d+[.、\s]*/, '').trim();
         for (const item of quizBank) {
             if (!item.q || !item.a) continue;
-            const processedItemQ = item.q.replace(/^\d+[.、\s]*/, '').trim();
-            if (processedQuestion === processedItemQ) { bestMatch = item; highestSimilarity = 1; break; }
-            const distance = getLevenshteinDistance(processedQuestion, processedItemQ);
-            const similarity = 1 - (distance / Math.max(processedQuestion.length, processedItemQ.length, 1));
+            const procItemQ = norm(item.q);
+            if (procQ === procItemQ) { bestMatch = item; highestSimilarity = 1; break; }
+            const distance = getLevenshteinDistance(procQ, procItemQ);
+            const similarity = 1 - (distance / Math.max(procQ.length, procItemQ.length, 1));
             if (similarity > highestSimilarity) { highestSimilarity = similarity; bestMatch = item; }
         }
-        const threshold = 0.8;
+        const threshold = 0.7; // 降低阈值，容忍细微差异
         if (highestSimilarity >= threshold && bestMatch) {
             let answer = bestMatch.a;
             // 如果有选项文本，基于文本重映射字母（防选项顺序变化）
@@ -392,7 +396,6 @@
                 for (let i = 0; i < answer.length; i++) {
                     const storedIdx = answer.charCodeAt(i) - 65;
                     const targetText = storedTexts[storedIdx] || '';
-                    // 在当前选项中找匹配文本的索引
                     let bestIdx = -1, bestSim = 0;
                     for (let j = 0; j < options.length; j++) {
                         const sim = 1 - (getLevenshteinDistance(targetText, options[j].trim()) / Math.max(targetText.length, options[j].trim().length, 1));
@@ -401,7 +404,7 @@
                     if (bestIdx >= 0 && bestSim > 0.6) {
                         remapped += String.fromCharCode(65 + bestIdx);
                     } else {
-                        remapped += answer[i]; // 回退到原字母
+                        remapped += answer[i];
                     }
                 }
                 if (remapped !== answer) {
@@ -1177,7 +1180,9 @@
             }
         }
 
-        saveQuizBank();
+        if (newRecords > 0) {
+            saveQuizBank();
+        }
         log(`错题记录完成！新增/更新 ${newRecords} 条，题库共 ${quizBank.length} 条。`);
 
         if (wrongCount > 0) {
