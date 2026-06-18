@@ -1273,83 +1273,82 @@
         await new Promise(r => setTimeout(r, 1200));
         if (!autoMode) { learnPageBusy = false; return; }
 
+        // 递归展开所有折叠模块（嵌套的需要多轮）
+        let collapsed = document.querySelectorAll('.el-collapse-item__header:not(.is-active)');
+        for (let round = 0; round < 6 && collapsed.length > 0; round++) {
+            for (const h of collapsed) { try { h.click(); } catch(e) {} }
+            await new Promise(r => setTimeout(r, 400));
+            collapsed = document.querySelectorAll('.el-collapse-item__header:not(.is-active)');
+        }
+        await new Promise(r => setTimeout(r, 600));
+
+        // 每次重新扫描全部知识点（不用缓存，防模块折叠导致DOM不完整）
+        const itemEls = document.querySelectorAll('.section-item-collapse-info .title-text');
+        const itemList = [];
+        itemEls.forEach(el => { const n = el.innerText.trim(); if (n) itemList.push(n); });
+        log(`扫描完成，共 ${itemList.length} 个知识点。`);
+
         const currentTitle = document.querySelector('.point-title-text');
         const currentName = currentTitle ? currentTitle.innerText.trim() : '';
-
-        let itemList = [];
-        try { itemList = JSON.parse(GM_getValue('learn_tree_items', '[]')); } catch(e) {}
-        if (itemList.length === 0) {
-            log("首次进入，构建项目树...");
-            const collapsedHeaders = document.querySelectorAll('.el-collapse-item__header:not(.is-active)');
-            for (const h of collapsedHeaders) {
-                try { h.click(); await new Promise(r => setTimeout(r, 500)); } catch(e) {}
-            }
-            await new Promise(r => setTimeout(r, 1000));
-            const items = document.querySelectorAll('.section-item-collapse-info .title-text');
-            items.forEach(el => { const n = el.innerText.trim(); if (n) itemList.push(n); });
-            GM_setValue('learn_tree_items', JSON.stringify(itemList));
-            log(`构建完成，共 ${itemList.length} 个项目。`);
-        } else {
-            log(`已加载树结构，共 ${itemList.length} 个项目。`);
-        }
-
         let currentIdx = itemList.indexOf(currentName);
-        if (currentIdx < 0 && currentName) {
-            itemList = [];
-            GM_setValue('learn_tree_items', '[]');
-            log("当前项目不在树中，下次重新构建。");
-            learnPageBusy = false;
-            return;
-        }
-        log(`当前项目: "${currentName}" (第 ${currentIdx + 1}/${itemList.length})`);
+        if (currentIdx < 0) currentIdx = -1; // 从第一个开始
+        log(`当前: "${currentName || '(无)'}"，从第 ${currentIdx + 1} 个开始。`);
 
         for (let i = currentIdx >= 0 ? currentIdx : 0; i < itemList.length; i++) {
             if (!autoMode) { learnPageBusy = false; return; }
             const name = itemList[i];
 
+            // 切换到目标知识点（重新扫描DOM，因为点击可能使DOM变化）
             const nowTitle = document.querySelector('.point-title-text');
             const nowName = nowTitle ? nowTitle.innerText.trim() : '';
             if (nowName !== name) {
-                log(`切换到项目: "${name}"`);
-                const allItems = document.querySelectorAll('.section-item-collapse-info .title-text');
-                let found = false;
-                for (const el of allItems) {
-                    if (el.innerText.trim() === name) {
-                        reliableClick(el);
-                        found = true;
-                        break;
+                log(`切换到: "${name}"`);
+                // 先确保目标在可见DOM中（可能需要展开父模块）
+                let targetEl = null;
+                for (let tryRound = 0; tryRound < 3 && !targetEl; tryRound++) {
+                    if (tryRound > 0) {
+                        // 还有折叠的，再展开一轮
+                        const ch = document.querySelectorAll('.el-collapse-item__header:not(.is-active)');
+                        for (const h of ch) { try { h.click(); } catch(e) {} }
+                        await new Promise(r => setTimeout(r, 600));
+                    }
+                    const allItems = document.querySelectorAll('.section-item-collapse-info .title-text');
+                    for (const el of allItems) {
+                        if (el.innerText.trim() === name) { targetEl = el; break; }
                     }
                 }
-                if (!found) { log(`未找到项目"${name}"，跳过。`); continue; }
+                if (!targetEl) { log(`未找到"${name}"，跳过。`); continue; }
+                reliableClick(targetEl);
                 await new Promise(r => setTimeout(r, 1500));
             }
-            // 先完成必学资源（无论是否切换都要检查）
-            await completeCurrentResources(name);
-            // 等DOM稳定后再检测掌握度
-            await new Promise(r => setTimeout(r, 800));
 
-            // 读取掌握度，并做双重验证
+            // 完成必学资源
+            await completeCurrentResources(name);
+
+            // 读掌握度
             function readMasteryPct() {
                 const el = document.querySelector('.simplified-mastery__percent');
                 if (!el) return NaN;
-                const raw = el.innerText || el.textContent || '';
-                const m = raw.match(/(\d+)/);
+                const m = (el.innerText || el.textContent || '').match(/(\d+)/);
                 return m ? parseInt(m[1]) : NaN;
             }
             let pct = readMasteryPct();
+            for (let w = 0; w < 8 && isNaN(pct); w++) {
+                await new Promise(r => setTimeout(r, 500));
+                pct = readMasteryPct();
+            }
             if (isNaN(pct)) { log(`"${name}" 无法读取掌握度。`); continue; }
+            // 等稳定
+            for (let w = 0; w < 5; w++) {
+                await new Promise(r => setTimeout(r, 400));
+                const p2 = readMasteryPct();
+                if (!isNaN(p2) && p2 === pct) break;
+                if (!isNaN(p2)) pct = p2;
+            }
             log(`"${name}" 掌握度: ${pct}%`);
 
             if (pct >= 90) {
                 log(`≥90%，跳过。`);
-                continue;
-            }
-
-            // 二次确认：重新读取防止瞬间数值变动
-            await new Promise(r => setTimeout(r, 500));
-            const pct2 = readMasteryPct();
-            if (!isNaN(pct2) && pct2 >= 90) {
-                log(`二次确认 ≥90% (${pct2}%)，跳过。`);
                 continue;
             }
 
