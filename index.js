@@ -723,12 +723,12 @@
                             if (!input) break;
                             const answerText = fillAnswers[j];
 
+                            // 尝试通过Vue组件写入
                             const wrapper = input.closest('.el-input');
                             const vueComp = wrapper?.__vue__;
                             if (vueComp) {
                                 const fillComp = vueComp.$parent;
                                 if (fillComp?.strings !== undefined) fillComp.strings = answerText;
-
                                 if (!sharedReviewComp) {
                                     const reviewComp = vueComp.$parent?.$parent?.$parent;
                                     if (reviewComp && 'userAnswerRequestVos' in reviewComp) {
@@ -736,12 +736,19 @@
                                         sharedRootComp = reviewComp?.$parent || null;
                                     }
                                 }
-
-                                input.value = answerText;
                                 log(`[Vue] 填入: ${answerText}`);
                             } else {
-                                log(`[Vue] 未找到 el-input 组件实例`);
+                                log(`[Vue] 未找到组件实例，用原生方式填入`);
                             }
+                            // 无论Vue是否成功，都用原生方式确保值写入（Edge兼容）
+                            const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                            if (nativeSetter) {
+                                nativeSetter.call(input, answerText);
+                            } else {
+                                input.value = answerText;
+                            }
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
                             await new Promise(r => setTimeout(r, 300));
                         }
 
@@ -931,8 +938,12 @@
                     if (vueComp) {
                         const fillComp = vueComp.$parent;
                         if (fillComp?.strings !== undefined) fillComp.strings = fillAnswers[j];
-                        input.value = fillAnswers[j];
                     }
+                    // 原生方式确保值写入（Edge兼容）
+                    const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                    if (ns) { ns.call(input, fillAnswers[j]); } else { input.value = fillAnswers[j]; }
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
                     await new Promise(r => setTimeout(r, 300));
                 }
             } else if (qInfo.optionType === 'custom-radio') {
